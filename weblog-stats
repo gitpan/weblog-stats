@@ -1,0 +1,198 @@
+#!/usr/bin/perl -w
+use strict;
+
+END {
+	my $user     = "bar";
+	my $password = "foo";
+	my $verbose  = 0;
+	
+	my $stats = MyStats->just_do_it( $user, $password, $verbose );
+	}
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+package MyStats;
+use strict;
+use warnings;
+
+use WWW::Mechanize;
+
+sub just_do_it
+	{
+	my $class = shift;
+	
+	my $self = $class->new( @_ );
+	
+	$self->get_page->cleanse_page->extract_results->
+		sort_results->print_header->print_results;
+		
+	return $self;
+	}	
+
+sub new 
+	{ 
+	my $class = shift; 
+
+	my $self = {};
+	
+	@{$self}{qw(user password verbose)} = @_;
+	
+	$self->{rankings} = [];
+		
+	return bless $self, $class;
+	}
+	
+sub user     { $_[0]->{user}     }
+sub password { $_[0]->{password} }
+sub verbose  { $_[0]->{verbose}  }
+
+sub rankings
+	{
+	my $self = shift;
+	
+	if( ref $_[0] eq 'ARRAY' ) { $self->{rankings} = $_[0] };
+	
+	$self->{rankings}
+	}
+
+sub page
+	{
+	my $self = shift;
+	
+	if( defined $_[0] ) { $self->{page} = $_[0] };
+	
+	$self->{page}
+	}
+
+sub articles
+	{
+	my $self = shift;
+	
+	if( defined $_[0] ) { $self->{articles} = $_[0] };
+	
+	$self->{articles}
+	}
+	
+sub weblogs
+	{
+	my $self = shift;
+	
+	if( defined $_[0] ) { $self->{weblogs} = $_[0] };
+	
+	$self->{weblogs}
+	}
+	
+sub add_ranking 
+	{ 
+	my $self = shift;
+	
+	if( ref $_[0] eq 'ARRAY' ) { push @{ $self->{rankings} }, $_[0] };
+	
+	$self;
+	}
+	
+
+sub get_page
+	{
+	my $self = shift;
+
+	my $mech = WWW::Mechanize->new( autocheck => 1 );
+	
+	warn "Logging in...\n" if $self->verbose;
+	$mech->get( "http://www.oreillynet.com/cs/weblog/login" );
+	
+	$mech->submit_form(
+		form_number => 3,
+		fields => {
+			login    => $self->user,
+			password => $self->password,
+		},
+	);
+	
+	warn "Getting home page...\n" if $self->verbose;
+	$mech->get( "http://www.oreillynet.com/cs/weblog/home" );
+	
+	warn "Getting stats...\n" if $self->verbose;
+	$mech->follow_link( text_regex => qr/with stats/ );
+	
+	$self->page( $mech->content );
+	
+	$self;
+	}
+	
+sub cleanse_page
+	{
+	my $self = shift;
+
+	my $page = $self->page;
+		
+	$page =~ s/.*<!--\s*articles\s*-->//isg;
+	$page =~ s/<!--\s*end\s+content\s*-->.*//isg;
+	
+	my( $articles, $weblogs ) = split /<!--\s*weblogs\s*-->/, $page, 2;
+	
+	$self->articles( $articles );
+	$self->weblogs( $weblogs );
+	
+	$self;	
+	}
+
+sub extract_results
+	{
+	my $self = shift;
+	
+	foreach my $chunk ( 
+		[ 'Article', $self->articles ], 
+		[ 'Weblog',  $self->weblogs  ],
+		)
+		{
+		my( $section, $html ) = @$chunk;
+	
+		while( $html =~ 
+			m|<a href.*?>(.*?)</a>.*?<br\s*/>Rank:\s*<b>\s*(\d+)\s*,\s*(\d+)|isg )
+			{
+			# $1 should be the title
+			# $2 should be the ranking
+			# $3 should be the absolute page views
+			$self->add_ranking( [ $section, $3, $2, $1 ] );
+			}
+		}
+
+	$self;	
+	}
+
+sub sort_results
+	{
+	my $self = shift;
+	
+	my @sorted = sort { $b->[1] <=> $a->[1] } @{ $self->rankings };
+	
+	$self->rankings( \@sorted );
+	
+	$self;
+	}
+	
+sub print_header
+	{
+	my $self = shift;
+	
+	my @times = localtime();
+	print "O'Reilly Net report for ", 
+		join( "/", $times[4]+1, $times[3], $times[5]+1900 ), "\n";	
+		
+	$self;
+	}
+	
+sub print_results
+	{
+	my $self = shift;
+	
+	printf "%6s %6s   %s\n", qw(Views Rank Title);
+	printf "%6s %6s   %s\n", "-" x 6, "-" x 6, "-" x 20;
+	
+	foreach my $thingy ( @{ $self->rankings } )
+		{
+		printf "%6s %6s   %s\n", @$thingy[1..3];	
+		}
+	
+	$self;
+	}
